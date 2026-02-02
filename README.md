@@ -2,6 +2,18 @@
 
 A Blender 5.0 extension providing convenient tools for working with armatures, designed to streamline animation preview workflows.
 
+## Project Structure
+
+```
+armature_tools/
+├── __init__.py           # Main entry point, handles registration
+├── properties.py         # PropertyGroup and update callbacks (Model)
+├── operators.py          # All operators (Controller)
+├── ui.py                 # Panel definitions (View)
+├── blender_manifest.toml # Extension manifest
+└── README.md             # This file
+```
+
 ## Features
 
 ### Quick Setup
@@ -95,3 +107,4 @@ GPL-3.0-or-later
 - Follow Camera with rotation driver
 - Frame Range auto-detection
 - Track To and Lock Camera toggles
+- Refactored to MVC architecture (properties.py, operators.py, ui.py)
