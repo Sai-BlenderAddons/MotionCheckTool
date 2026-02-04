@@ -52,6 +52,28 @@ def update_camera_rotation_speed(self, context):
 
 
 # ============================================================
+# Update callback for fake bone depth
+# ============================================================
+def update_fake_bone_depth(self, context):
+    """Update the bevel depth for all fake bone curves in real-time"""
+    if not context.active_object or context.active_object.type != 'ARMATURE':
+        return
+    
+    armature = context.active_object
+    collection_name = f"{armature.name}_FakeBones"
+    
+    if collection_name not in bpy.data.collections:
+        return
+    
+    fake_bone_collection = bpy.data.collections[collection_name]
+    depth_value = self.fake_bone_depth
+    
+    for obj in fake_bone_collection.objects:
+        if obj.type == 'CURVE':
+            obj.data.bevel_depth = depth_value
+
+
+# ============================================================
 # Property Group
 # ============================================================
 class ARMATURE_TOOLS_Properties(PropertyGroup):
@@ -75,4 +97,45 @@ class ARMATURE_TOOLS_Properties(PropertyGroup):
         step=1,
         precision=3,
         update=update_camera_rotation_speed,
+    )
+    
+    fake_bone_depth: FloatProperty(
+        name="Bevel Depth",
+        description="Bevel depth for fake bone curves (updates in real-time)",
+        default=1.0,
+        min=0.01,
+        max=10.0,
+        step=10,
+        precision=3,
+        update=update_fake_bone_depth,
+    )
+    
+    rotation_threshold_x: FloatProperty(
+        name="X Threshold",
+        description="Maximum allowed X-axis rotation per frame (degrees). Exceeding this marks R channel",
+        default=8.0,
+        min=1.0,
+        max=180.0,
+        step=100,
+        precision=1,
+    )
+    
+    rotation_threshold_y: FloatProperty(
+        name="Y Threshold",
+        description="Maximum allowed Y-axis rotation per frame (degrees). Exceeding this marks G channel",
+        default=8.0,
+        min=1.0,
+        max=180.0,
+        step=100,
+        precision=1,
+    )
+    
+    rotation_threshold_z: FloatProperty(
+        name="Z Threshold",
+        description="Maximum allowed Z-axis rotation per frame (degrees). Exceeding this marks B channel",
+        default=8.0,
+        min=1.0,
+        max=180.0,
+        step=100,
+        precision=1,
     )

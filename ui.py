@@ -158,8 +158,118 @@ class ARMATURE_TOOLS_PT_main_panel(Panel):
 
 
 # ============================================================
+# Fake Bone Panel
+# ============================================================
+class ARMATURE_TOOLS_PT_fake_bone_panel(Panel):
+    """Fake Bone Panel"""
+    bl_label = "Fake Bone"
+    bl_idname = "ARMATURE_TOOLS_PT_fake_bone_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Armature Tools"
+
+    def draw(self, context):
+        layout = self.layout
+        props = context.scene.armature_tools_props
+        armature = context.active_object if context.active_object and context.active_object.type == 'ARMATURE' else None
+        
+        # Create Fake Bones button
+        box = layout.box()
+        box.label(text="Create", icon='BONE_DATA')
+        row = box.row()
+        row.enabled = armature is not None
+        row.operator("armature_tools.create_fake_bones", icon='ADD')
+        
+        if not armature:
+            box.label(text="Select an Armature to create", icon='INFO')
+        
+        # Find any fake bones collection
+        fake_bone_collection = None
+        related_armature = None
+        
+        # Check if active object is an armature
+        if armature:
+            collection_name = f"{armature.name}_FakeBones"
+            if collection_name in bpy.data.collections:
+                fake_bone_collection = bpy.data.collections[collection_name]
+                related_armature = armature
+        
+        # Or check if active object is a curve in a fake bones collection
+        if not fake_bone_collection and context.active_object and context.active_object.type == 'CURVE':
+            for collection in context.active_object.users_collection:
+                if collection.name.endswith("_FakeBones"):
+                    fake_bone_collection = collection
+                    armature_name = collection.name.replace("_FakeBones", "")
+                    if armature_name in bpy.data.objects:
+                        related_armature = bpy.data.objects[armature_name]
+                    break
+        
+        # Fallback: find any fake bones collection in scene
+        if not fake_bone_collection:
+            for obj in context.scene.objects:
+                if obj.type == 'ARMATURE':
+                    collection_name = f"{obj.name}_FakeBones"
+                    if collection_name in bpy.data.collections:
+                        fake_bone_collection = bpy.data.collections[collection_name]
+                        related_armature = obj
+                        break
+        
+        layout.separator()
+        
+        # Settings section
+        box = layout.box()
+        box.label(text="Settings", icon='PREFERENCES')
+        
+        if fake_bone_collection:
+            curve_count = sum(1 for obj in fake_bone_collection.objects if obj.type == 'CURVE')
+            box.label(text=f"Collection: {fake_bone_collection.name}")
+            box.label(text=f"Fake Bones: {curve_count}")
+            
+            # Bevel Depth slider (real-time update)
+            box.prop(props, "fake_bone_depth", slider=True)
+        else:
+            box.label(text="No fake bones created yet", icon='INFO')
+        
+        layout.separator()
+        
+        # Rotation Anomaly Detection section
+        box = layout.box()
+        box.label(text="Rotation Anomaly Detection", icon='ERROR')
+        
+        # Threshold parameters for each axis
+        col = box.column(align=True)
+        col.label(text="Max Rotation/Frame (°):")
+        row = col.row(align=True)
+        row.prop(props, "rotation_threshold_x", text="X(R)")
+        row.prop(props, "rotation_threshold_y", text="Y(G)")
+        row.prop(props, "rotation_threshold_z", text="Z(B)")
+        
+        # Check if we can run the analysis
+        can_analyze = fake_bone_collection is not None
+        
+        # Mark keyframes buttons
+        col = box.column(align=True)
+        
+        # Button for selected curves only
+        row = col.row()
+        row.enabled = can_analyze
+        op = row.operator("armature_tools.mark_acceleration_keyframes", text="Detect Selected", icon='RESTRICT_SELECT_OFF')
+        op.selected_only = True
+        
+        # Button for all curves
+        row = col.row()
+        row.enabled = can_analyze
+        op = row.operator("armature_tools.mark_acceleration_keyframes", text="Detect All", icon='GROUP_BONE')
+        op.selected_only = False
+        
+        if not can_analyze:
+            box.label(text="Create fake bones first", icon='INFO')
+
+
+# ============================================================
 # Panel classes list for registration
 # ============================================================
 panel_classes = (
     ARMATURE_TOOLS_PT_main_panel,
+    ARMATURE_TOOLS_PT_fake_bone_panel,
 )

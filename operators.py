@@ -514,6 +514,376 @@ class ARMATURE_TOOLS_OT_toggle_lock_camera(Operator):
 
 
 # ============================================================
+# Operator: Create Fake Bones from Armature
+# ============================================================
+class ARMATURE_TOOLS_OT_create_fake_bones(Operator):
+    """Create curve objects that mimic bones, constrained to follow the armature"""
+    bl_idname = "armature_tools.create_fake_bones"
+    bl_label = "Create Fake Bones"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.active_object and context.active_object.type == 'ARMATURE'
+
+    def execute(self, context):
+        armature = context.active_object
+        props = context.scene.armature_tools_props
+        
+        # Create or get the collection for fake bones
+        collection_name = f"{armature.name}_FakeBones"
+        if collection_name in bpy.data.collections:
+            fake_bone_collection = bpy.data.collections[collection_name]
+            # Clear existing fake bones
+            for obj in list(fake_bone_collection.objects):
+                bpy.data.objects.remove(obj, do_unlink=True)
+        else:
+            fake_bone_collection = bpy.data.collections.new(collection_name)
+            context.scene.collection.children.link(fake_bone_collection)
+        
+        # Store created curves for later reference
+        created_curves = []
+        
+        # Iterate through all bones
+        for bone in armature.data.bones:
+            # Create curve data
+            curve_data = bpy.data.curves.new(name=f"FakeBone_{bone.name}", type='CURVE')
+            curve_data.dimensions = '3D'
+            curve_data.bevel_depth = props.fake_bone_depth
+            curve_data.bevel_resolution = 4
+            curve_data.fill_mode = 'FULL'
+            
+            # Create a spline
+            spline = curve_data.splines.new('POLY')
+            spline.points.add(1)  # Add one more point (starts with 1)
+            
+            # Set point positions
+            # First point at origin (0, 0, 0)
+            spline.points[0].co = (0, 0, 0, 1)
+            # Second point at (0, bone_length, 0) - along Y axis
+            bone_length = bone.length
+            spline.points[1].co = (0, bone_length, 0, 1)
+            
+            # Create curve object
+            curve_obj = bpy.data.objects.new(f"FakeBone_{bone.name}", curve_data)
+            
+            # Link to collection
+            fake_bone_collection.objects.link(curve_obj)
+            
+            # Add Child Of constraint
+            constraint = curve_obj.constraints.new(type='CHILD_OF')
+            constraint.target = armature
+            constraint.subtarget = bone.name
+            constraint.name = f"Follow_{bone.name}"
+            
+            # Set inverse matrix to align properly
+            # We need to set the inverse so the curve follows the bone correctly
+            constraint.set_inverse_pending = True
+            
+            created_curves.append(curve_obj)
+        
+        # Update view layer to apply constraints
+        context.view_layer.update()
+        
+        # Clear inverse for all constraints (makes them follow bone transform directly)
+        for curve_obj in created_curves:
+            for constraint in curve_obj.constraints:
+                if constraint.type == 'CHILD_OF':
+                    # Calculate and set the inverse matrix
+                    context.view_layer.objects.active = curve_obj
+                    with context.temp_override(object=curve_obj, selected_objects=[curve_obj]):
+                        bpy.ops.constraint.childof_clear_inverse(constraint=constraint.name, owner='OBJECT')
+        
+        # Restore active object to armature
+        context.view_layer.objects.active = armature
+        armature.select_set(True)
+        
+        self.report({'INFO'}, f"Created {len(created_curves)} fake bones in collection '{collection_name}'")
+        return {'FINISHED'}
+
+
+# ============================================================
+# Operator: Mark Rotation Anomalies
+# ============================================================
+class ARMATURE_TOOLS_OT_mark_acceleration_keyframes(Operator):
+    """Detect and mark frames where bone rotation exceeds threshold per axis (X=R, Y=G, Z=B)"""
+    bl_idname = "armature_tools.mark_acceleration_keyframes"
+    bl_label = "Detect Rotation Anomalies"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    selected_only: bpy.props.BoolProperty(
+        name="Selected Only",
+        description="Only process selected curve objects",
+        default=False,
+    )
+
+    @classmethod
+    def poll(cls, context):
+        # Check if there's an armature in scene and fake bones exist
+        for obj in context.scene.objects:
+            if obj.type == 'ARMATURE':
+                collection_name = f"{obj.name}_FakeBones"
+                if collection_name in bpy.data.collections:
+                    return True
+        return False
+
+    def get_bone_euler_from_fcurves(self, armature, bone_name, frame):
+        """Get bone rotation as Euler angles from FCurves at a specific frame"""
+        from mathutils import Quaternion, Euler
+        import math
+        
+        anim_data = armature.animation_data
+        if not anim_data or not anim_data.action:
+            return None
+        
+        action = anim_data.action
+        action_slot = anim_data.action_slot
+        
+        try:
+            from bpy_extras import anim_utils
+            channelbag = anim_utils.action_get_channelbag_for_slot(action, action_slot)
+            if not channelbag:
+                return None
+        except Exception:
+            return None
+        
+        # Look for rotation fcurves for this bone
+        quat_values = [None, None, None, None]
+        euler_values = [None, None, None]
+        
+        base_path = f'pose.bones["{bone_name}"]'
+        
+        for fcurve in channelbag.fcurves:
+            if base_path not in fcurve.data_path:
+                continue
+            
+            if "rotation_quaternion" in fcurve.data_path:
+                idx = fcurve.array_index
+                if 0 <= idx <= 3:
+                    quat_values[idx] = fcurve.evaluate(frame)
+            
+            elif "rotation_euler" in fcurve.data_path:
+                idx = fcurve.array_index
+                if 0 <= idx <= 2:
+                    euler_values[idx] = fcurve.evaluate(frame)
+        
+        # Return euler directly if available
+        if all(v is not None for v in euler_values):
+            return Euler(euler_values)
+        
+        # Convert quaternion to euler if available
+        if all(v is not None for v in quat_values):
+            quat = Quaternion(quat_values)
+            return quat.to_euler()
+        
+        return None
+
+    def calculate_axis_rotation_diff(self, euler1, euler2):
+        """Calculate the rotation difference per axis in degrees"""
+        import math
+        
+        if euler1 is None or euler2 is None:
+            return (0.0, 0.0, 0.0)
+        
+        # Calculate difference per axis (in radians), then convert to degrees
+        diff_x = abs(math.degrees(euler2.x - euler1.x))
+        diff_y = abs(math.degrees(euler2.y - euler1.y))
+        diff_z = abs(math.degrees(euler2.z - euler1.z))
+        
+        # Handle angle wrapping (if difference > 180, take the shorter path)
+        if diff_x > 180:
+            diff_x = 360 - diff_x
+        if diff_y > 180:
+            diff_y = 360 - diff_y
+        if diff_z > 180:
+            diff_z = 360 - diff_z
+        
+        return (diff_x, diff_y, diff_z)
+
+    def execute(self, context):
+        props = context.scene.armature_tools_props
+        threshold_x = props.rotation_threshold_x
+        threshold_y = props.rotation_threshold_y
+        threshold_z = props.rotation_threshold_z
+        
+        # Find armature and its fake bones collection
+        armature = None
+        fake_bone_collection = None
+        
+        # If active object is armature, use it
+        if context.active_object and context.active_object.type == 'ARMATURE':
+            armature = context.active_object
+            collection_name = f"{armature.name}_FakeBones"
+            if collection_name in bpy.data.collections:
+                fake_bone_collection = bpy.data.collections[collection_name]
+        
+        # If active object is a curve in a fake bones collection
+        if not armature and context.active_object and context.active_object.type == 'CURVE':
+            for collection in context.active_object.users_collection:
+                if collection.name.endswith("_FakeBones"):
+                    fake_bone_collection = collection
+                    armature_name = collection.name.replace("_FakeBones", "")
+                    if armature_name in bpy.data.objects:
+                        armature = bpy.data.objects[armature_name]
+                    break
+        
+        # Fallback: find any armature with fake bones
+        if not armature:
+            for obj in context.scene.objects:
+                if obj.type == 'ARMATURE':
+                    collection_name = f"{obj.name}_FakeBones"
+                    if collection_name in bpy.data.collections:
+                        armature = obj
+                        fake_bone_collection = bpy.data.collections[collection_name]
+                        break
+        
+        if not armature or not fake_bone_collection:
+            self.report({'ERROR'}, "No armature with fake bones found")
+            return {'CANCELLED'}
+        
+        # Get frame range
+        frame_start = context.scene.frame_start
+        frame_end = context.scene.frame_end
+        
+        # Determine which curves to process
+        curves_to_process = []
+        
+        if self.selected_only:
+            # Only selected curves
+            for obj in context.selected_objects:
+                if obj.type == 'CURVE' and obj in fake_bone_collection.objects.values():
+                    curves_to_process.append(obj)
+        else:
+            # All curves in the collection
+            for obj in fake_bone_collection.objects:
+                if obj.type == 'CURVE':
+                    curves_to_process.append(obj)
+        
+        if not curves_to_process:
+            self.report({'WARNING'}, "No curves to process")
+            return {'CANCELLED'}
+        
+        total_anomalies = [0, 0, 0]  # X, Y, Z counts
+        processed_count = 0
+        
+        for curve_obj in curves_to_process:
+            # Find the associated bone name from constraint
+            bone_name = None
+            for constraint in curve_obj.constraints:
+                if constraint.type == 'CHILD_OF' and constraint.target == armature:
+                    bone_name = constraint.subtarget
+                    break
+            
+            if not bone_name:
+                continue
+            
+            # Get rotations from FCurves directly (fast!)
+            # Separate anomaly frames for each axis
+            anomaly_frames_x = []  # X axis -> R channel
+            anomaly_frames_y = []  # Y axis -> G channel
+            anomaly_frames_z = []  # Z axis -> B channel
+            
+            prev_euler = None
+            
+            for frame in range(frame_start, frame_end + 1):
+                curr_euler = self.get_bone_euler_from_fcurves(armature, bone_name, frame)
+                
+                if prev_euler is not None and curr_euler is not None:
+                    diff_x, diff_y, diff_z = self.calculate_axis_rotation_diff(prev_euler, curr_euler)
+                    
+                    if diff_x > threshold_x:
+                        anomaly_frames_x.append(frame)
+                    if diff_y > threshold_y:
+                        anomaly_frames_y.append(frame)
+                    if diff_z > threshold_z:
+                        anomaly_frames_z.append(frame)
+                
+                prev_euler = curr_euler
+            
+            # Clear existing color keyframes on this curve BEFORE setting new ones
+            if curve_obj.animation_data and curve_obj.animation_data.action:
+                action = curve_obj.animation_data.action
+                action_slot = curve_obj.animation_data.action_slot
+                try:
+                    from bpy_extras import anim_utils
+                    channelbag = anim_utils.action_get_channelbag_for_slot(action, action_slot)
+                    if channelbag:
+                        # Remove all color fcurves (R, G, B, A)
+                        fcurves_to_remove = []
+                        for fcurve in channelbag.fcurves:
+                            if fcurve.data_path == "color":
+                                fcurves_to_remove.append(fcurve)
+                        for fcurve in fcurves_to_remove:
+                            channelbag.fcurves.remove(fcurve)
+                except Exception:
+                    pass
+            
+            # Ensure animation data exists for new keyframes
+            if not curve_obj.animation_data:
+                curve_obj.animation_data_create()
+            
+            # Set curve base color (all 0 is normal)
+            curve_obj.color = (0.0, 0.0, 0.0, 1.0)
+            
+            # Process each axis/channel
+            axis_data = [
+                (anomaly_frames_x, 0),  # X -> R (index 0)
+                (anomaly_frames_y, 1),  # Y -> G (index 1)
+                (anomaly_frames_z, 2),  # Z -> B (index 2)
+            ]
+            
+            for anomaly_frames, channel_index in axis_data:
+                # Set initial keyframe at frame_start with value=0
+                curve_obj.color[channel_index] = 0.0
+                curve_obj.keyframe_insert(data_path="color", index=channel_index, frame=frame_start)
+                
+                if anomaly_frames:
+                    # Build a dict of frames that need keyframes
+                    frames_to_key = {}
+                    
+                    for frame in anomaly_frames:
+                        # Set value=1 for anomaly frame
+                        frames_to_key[frame] = 1.0
+                        
+                        # Set value=0 two frames before (if not already keyed and within range)
+                        frame_before = frame - 2
+                        if frame_before >= frame_start and frame_before not in frames_to_key:
+                            frames_to_key[frame_before] = 0.0
+                        
+                        # Set value=0 two frames after (if not already keyed and within range)
+                        frame_after = frame + 2
+                        if frame_after <= frame_end and frame_after not in frames_to_key:
+                            frames_to_key[frame_after] = 0.0
+                    
+                    # Insert keyframes for this channel
+                    for frame, value in sorted(frames_to_key.items()):
+                        curve_obj.color[channel_index] = value
+                        curve_obj.keyframe_insert(data_path="color", index=channel_index, frame=frame)
+                    
+                    total_anomalies[channel_index] += len(anomaly_frames)
+            
+            # Set all color keyframes to CONSTANT interpolation
+            if curve_obj.animation_data and curve_obj.animation_data.action:
+                action = curve_obj.animation_data.action
+                action_slot = curve_obj.animation_data.action_slot
+                try:
+                    from bpy_extras import anim_utils
+                    channelbag = anim_utils.action_get_channelbag_for_slot(action, action_slot)
+                    if channelbag:
+                        for fcurve in channelbag.fcurves:
+                            if fcurve.data_path == "color" and fcurve.array_index in (0, 1, 2):
+                                for keyframe in fcurve.keyframe_points:
+                                    keyframe.interpolation = 'CONSTANT'
+                except Exception:
+                    pass
+            
+            processed_count += 1
+        
+        self.report({'INFO'}, f"Processed {processed_count} curves. Anomalies - X(R):{total_anomalies[0]}, Y(G):{total_anomalies[1]}, Z(B):{total_anomalies[2]}")
+        return {'FINISHED'}
+
+
+# ============================================================
 # Operator classes list for registration
 # ============================================================
 operator_classes = (
@@ -523,4 +893,6 @@ operator_classes = (
     ARMATURE_TOOLS_OT_set_frame_range,
     ARMATURE_TOOLS_OT_toggle_track_to,
     ARMATURE_TOOLS_OT_toggle_lock_camera,
+    ARMATURE_TOOLS_OT_create_fake_bones,
+    ARMATURE_TOOLS_OT_mark_acceleration_keyframes,
 )

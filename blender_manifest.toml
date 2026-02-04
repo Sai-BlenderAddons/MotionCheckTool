@@ -1,9 +1,9 @@
 schema_version = "1.0.0"
 
 id = "armature_tools"
-version = "1.0.0"
+version = "1.1.0"
 name = "Armature Tools"
-tagline = "Tools for working with armatures: B-Bone display, bone scaling, camera follow, and frame range"
+tagline = "Armature workflow tools: display controls, follow camera, fake bones, and per-axis mocap error detection"
 maintainer = "Developer"
 type = "add-on"
 
