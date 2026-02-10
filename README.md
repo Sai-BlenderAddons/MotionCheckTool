@@ -1,6 +1,6 @@
 # Armature Tools - Blender 5.0 Extension
 
-A Blender 5.0 extension providing convenient tools for working with armatures, designed to streamline animation preview workflows and detect motion capture errors with per-axis precision.
+A Blender 5.0 extension providing convenient tools for working with armatures, designed to streamline animation preview workflows, detect motion capture errors with per-axis precision, and batch process FBX files.
 
 ## Project Structure
 
@@ -43,11 +43,12 @@ One-click setup that automatically:
 #### Camera Setup
 - **Create Follow Camera** - Creates an Empty and Camera that follow the Hips bone
   - Empty uses Copy Location constraint to track Hips position
-  - Camera is parented to Empty with Track To constraint
+  - Camera is parented to Empty
   - Empty rotates around Z-axis based on frame number (controllable speed)
+  - Track To constraint is disabled by default for manual camera positioning
   - Automatically switches to camera view and enables "Lock Camera to View"
 - **Rotation Speed** - Adjust camera orbit speed (-2.0 to 2.0 degrees/frame)
-- **Track To Target** - Toggle camera tracking on/off for free rotation
+- **Track To Target** - Toggle camera tracking on/off (default: OFF)
 - **Lock Camera to View** - Toggle viewport camera lock
 
 #### Frame Range
@@ -112,9 +113,53 @@ Designed to detect motion capture errors such as sudden flips or solver failures
 
 ---
 
+### Batch Processing Panel
+
+Batch process multiple FBX files with consistent settings.
+
+#### Path Settings
+- **FBX Source Folder** - Folder containing FBX files to import
+- **Output Folder** - Folder to save processed .blend files
+
+#### Workflow
+Click **Batch Process FBX** to:
+1. Clear the current scene (including protected actions)
+2. Apply stored render settings
+3. Import each FBX file
+4. Run Quick Setup automatically
+5. Configure metadata (Frame stamp enabled, Note set to FBX filename)
+6. Set output path to `{FBX_name}_`
+7. Save as .blend file
+
+#### Sub-Panels
+
+**Format:**
+- Resolution (X, Y, %)
+- Pixel Aspect Ratio
+
+**Frame Range:**
+- Frame Start/End/Step
+- Frame Rate (FPS, Base)
+- Time Remapping (Old/New)
+
+**Output:**
+- Output Path (auto-set to `{FBX_name}_` during batch)
+- File Format (PNG, JPEG, EXR, etc.)
+- Color Mode, Color Depth
+- Format-specific settings (compression, quality, codec)
+- Overwrite, Placeholders, File Extensions, Cache Result
+
+**Metadata:**
+- Burn Into Image toggle
+- Font Settings (Size, Text Color, Background, Include Labels)
+- Include options (Time, Date, Frame, Camera, etc.)
+- Note (auto-set to FBX filename during batch)
+
+---
+
 ## Installation
 
-1. Download the `armature_tools-1.1.0.zip` file
+1. Download the `armature_tools-1.2.0.zip` file
 2. In Blender 5.0, go to `Edit > Preferences > Get Extensions`
 3. Click the dropdown menu in the top-right corner
 4. Select `Install from Disk...`
@@ -123,7 +168,7 @@ Designed to detect motion capture errors such as sudden flips or solver failures
 ## Usage
 
 ### Panel Location
-Both panels appear in the 3D Viewport sidebar (press `N` to toggle), under the **"Armature Tools"** tab.
+All panels appear in the 3D Viewport sidebar (press `N` to toggle), under the **"Armature Tools"** tab.
 
 ### Typical Animation Preview Workflow
 
@@ -131,7 +176,7 @@ Both panels appear in the 3D Viewport sidebar (press `N` to toggle), under the *
 2. Click **Quick Setup** to automatically configure everything
 3. Use the playback controls to preview the animation
 4. Adjust camera rotation speed as needed
-5. Toggle **Track To Target** off to manually adjust camera angle
+5. Toggle **Track To Target** on if you want the camera to auto-aim at the target
 
 ### Mocap Error Detection Workflow
 
@@ -149,6 +194,22 @@ Both panels appear in the 3D Viewport sidebar (press `N` to toggle), under the *
    - **Blue** curves = Z-axis rotation issues
    - **Mixed colors** = multiple axis issues
 7. Use **Detect Selected** to re-analyze specific bones with different thresholds
+
+### Batch FBX Processing Workflow
+
+1. Configure render settings in the current scene (resolution, format, metadata, etc.)
+2. Open the **Batch Processing** panel
+3. Set **FBX Source Folder** to the folder containing your FBX files
+4. Set **Output Folder** to where you want the .blend files saved
+5. Adjust any settings in the sub-panels (Format, Frame Range, Output, Metadata)
+6. Click **Batch Process FBX**
+7. Monitor progress in the Info panel (Window > Toggle System Console on Windows)
+
+**Notes:**
+- Each .blend file will be named after its source FBX file
+- Output path is automatically set to `{FBX_name}_` for each file
+- Frame stamp and Note are auto-configured (Note shows FBX filename)
+- Protected actions are cleared between files to prevent bloat
 
 ---
 
@@ -171,6 +232,19 @@ The follow camera automatically detects Hips bones with these names:
 GPL-3.0-or-later
 
 ## Changelog
+
+### v1.2.0
+- Added **Batch Processing** panel for FBX files
+  - Process multiple FBX files with consistent settings
+  - Auto-run Quick Setup on each file
+  - Configure render settings, output format, and metadata
+  - Output path auto-set to `{FBX_name}_`
+  - Note auto-set to FBX filename
+  - Force clear all data blocks including protected actions between files
+- **Camera improvements**
+  - Track To constraint now defaults to OFF for manual positioning
+  - Camera distance calculated from armature dimensions
+  - Simplified camera setup (removed helper mesh approach)
 
 ### v1.1.0
 - Added **Fake Bone** panel (separate from Armature Tools)

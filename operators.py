@@ -284,71 +284,72 @@ class ARMATURE_TOOLS_OT_create_follow_camera(Operator):
             self.report({'ERROR'}, "Could not find Hips bone. Please ensure the armature has a bone named 'Hips' or similar")
             return {'CANCELLED'}
 
-        # Create Empty
+        # Get armature dimensions for initial camera distance
+        context.view_layer.update()
+        dimensions = armature.dimensions
+        max_dimension = max(dimensions.x, dimensions.y, dimensions.z)
+        camera_distance = max_dimension * 2.5 if max_dimension > 0 else 5.0
+
+        # ====== Create Camera Target Empty ======
         bpy.ops.object.empty_add(type='PLAIN_AXES', location=(0, 0, 0))
-        empty = context.active_object
-        empty.name = f"{armature.name}_Camera_Target"
-        empty.empty_display_size = 0.01
+        target_empty = context.active_object
+        target_empty.name = f"{armature.name}_Camera_Target"
+        target_empty.empty_display_size = 0.1
         
-        # Add custom property for rotation speed with UI settings
-        empty["rotation_speed"] = props.camera_rotation_speed
-        
-        # Set up the ID property UI limits
-        id_props = empty.id_properties_ui("rotation_speed")
+        # Add custom property for rotation speed
+        target_empty["rotation_speed"] = props.camera_rotation_speed
+        id_props = target_empty.id_properties_ui("rotation_speed")
         id_props.update(
             min=-2.0,
             max=2.0,
             soft_min=-2.0,
             soft_max=2.0,
             default=0.5,
-            description="Camera orbit rotation speed (degrees per frame). Negative = clockwise, Positive = counter-clockwise"
+            description="Camera orbit rotation speed (degrees per frame)"
         )
 
-        # Add Copy Location constraint to Empty
-        constraint = empty.constraints.new(type='COPY_LOCATION')
-        constraint.target = armature
-        constraint.subtarget = hips_bone_name
-        constraint.name = "Follow_Hips"
+        # Add Copy Location constraint to follow Hips
+        constraint_loc = target_empty.constraints.new(type='COPY_LOCATION')
+        constraint_loc.target = armature
+        constraint_loc.subtarget = hips_bone_name
+        constraint_loc.name = "Follow_Hips"
         
         # Add driver for Z rotation based on frame
-        # Expression: radians(frame * rotation_speed)
-        driver = empty.driver_add("rotation_euler", 2).driver
-        driver.type = 'SCRIPTED'
+        driver_rot = target_empty.driver_add("rotation_euler", 2).driver
+        driver_rot.type = 'SCRIPTED'
         
-        # Add frame variable
-        var_frame = driver.variables.new()
+        var_frame = driver_rot.variables.new()
         var_frame.name = "frame"
         var_frame.type = 'SINGLE_PROP'
         var_frame.targets[0].id_type = 'SCENE'
         var_frame.targets[0].id = context.scene
         var_frame.targets[0].data_path = "frame_current"
         
-        # Add rotation_speed variable from custom property
-        var_speed = driver.variables.new()
+        var_speed = driver_rot.variables.new()
         var_speed.name = "speed"
         var_speed.type = 'SINGLE_PROP'
         var_speed.targets[0].id_type = 'OBJECT'
-        var_speed.targets[0].id = empty
+        var_speed.targets[0].id = target_empty
         var_speed.targets[0].data_path = '["rotation_speed"]'
         
-        # Set expression: convert degrees to radians
-        driver.expression = "radians(frame * speed)"
+        driver_rot.expression = "radians(frame * speed)"
 
-        # Create Camera
-        bpy.ops.object.camera_add(location=(0, -5, 2))
+        # ====== Create Camera ======
+        bpy.ops.object.camera_add(location=(0, -camera_distance, max_dimension * 0.3))
         camera = context.active_object
         camera.name = f"{armature.name}_Follow_Camera"
-
-        # Parent camera to empty
-        camera.parent = empty
-        camera.matrix_parent_inverse = empty.matrix_world.inverted()
-
-        # Point camera towards the empty/hips
+        
+        # Parent camera to target empty
+        camera.parent = target_empty
+        camera.matrix_parent_inverse = target_empty.matrix_world.inverted()
+        
+        # Add Track To constraint to camera (disabled by default)
         constraint_track = camera.constraints.new(type='TRACK_TO')
-        constraint_track.target = empty
+        constraint_track.target = target_empty
         constraint_track.track_axis = 'TRACK_NEGATIVE_Z'
         constraint_track.up_axis = 'UP_Y'
-        
+        constraint_track.influence = 0.0  # Disabled by default
+
         # Set the camera as the active scene camera
         context.scene.camera = camera
         
@@ -357,14 +358,12 @@ class ARMATURE_TOOLS_OT_create_follow_camera(Operator):
             if area.type == 'VIEW_3D':
                 for space in area.spaces:
                     if space.type == 'VIEW_3D':
-                        # Switch to camera view
                         space.region_3d.view_perspective = 'CAMERA'
-                        # Enable lock camera to view
                         space.lock_camera = True
                         break
                 break
 
-        self.report({'INFO'}, f"Created follow camera setup tracking '{hips_bone_name}' bone (Camera view enabled)")
+        self.report({'INFO'}, f"Created follow camera tracking '{hips_bone_name}' (Track To: OFF)")
         return {'FINISHED'}
 
 
@@ -884,6 +883,247 @@ class ARMATURE_TOOLS_OT_mark_acceleration_keyframes(Operator):
 
 
 # ============================================================
+# Operator: Batch Process FBX Files
+# ============================================================
+class ARMATURE_TOOLS_OT_batch_process_fbx(Operator):
+    """Batch process FBX files: import, quick setup, configure metadata, and save as .blend files"""
+    bl_idname = "armature_tools.batch_process_fbx"
+    bl_label = "Batch Process FBX"
+    bl_options = {'REGISTER'}
+
+    def execute(self, context):
+        import os
+        
+        # Get props from current context (before any file operations)
+        props = context.scene.armature_tools_props
+        
+        # Get and validate paths BEFORE any file operations
+        fbx_folder = bpy.path.abspath(props.batch_fbx_folder)
+        output_folder = bpy.path.abspath(props.batch_output_folder)
+        
+        # Validate FBX folder
+        if not props.batch_fbx_folder:
+            self.report({'ERROR'}, "FBX folder path is not set")
+            return {'CANCELLED'}
+        
+        if not os.path.isdir(fbx_folder):
+            self.report({'ERROR'}, f"FBX folder does not exist: {fbx_folder}")
+            return {'CANCELLED'}
+        
+        # Get list of FBX files
+        fbx_files = sorted([f for f in os.listdir(fbx_folder) if f.lower().endswith('.fbx')])
+        
+        if not fbx_files:
+            self.report({'ERROR'}, f"No FBX files found in: {fbx_folder}")
+            return {'CANCELLED'}
+        
+        self.report({'INFO'}, f"Found {len(fbx_files)} FBX files to process")
+        
+        # Validate output folder
+        if not props.batch_output_folder:
+            self.report({'ERROR'}, "Output folder path is not set")
+            return {'CANCELLED'}
+        
+        if not os.path.isdir(output_folder):
+            try:
+                os.makedirs(output_folder)
+                self.report({'INFO'}, f"Created output folder: {output_folder}")
+            except Exception as e:
+                self.report({'ERROR'}, f"Cannot create output folder: {e}")
+                return {'CANCELLED'}
+        
+        # Store current render settings BEFORE any file operations
+        render = context.scene.render
+        stored_settings = {
+            'resolution_x': render.resolution_x,
+            'resolution_y': render.resolution_y,
+            'resolution_percentage': render.resolution_percentage,
+            'fps': render.fps,
+            'fps_base': render.fps_base,
+            'frame_map_old': render.frame_map_old,
+            'frame_map_new': render.frame_map_new,
+            'pixel_aspect_x': render.pixel_aspect_x,
+            'pixel_aspect_y': render.pixel_aspect_y,
+            'file_format': render.image_settings.file_format,
+            'color_mode': render.image_settings.color_mode,
+            'color_depth': render.image_settings.color_depth,
+            'compression': render.image_settings.compression,
+            # Stamp settings
+            'use_stamp': render.use_stamp,
+            'stamp_font_size': render.stamp_font_size,
+            'stamp_foreground': tuple(render.stamp_foreground),
+            'stamp_background': tuple(render.stamp_background),
+            'use_stamp_labels': render.use_stamp_labels,
+        }
+        
+        self.report({'INFO'}, "Starting batch processing...")
+        
+        processed_count = 0
+        error_count = 0
+        error_files = []
+        
+        for i, fbx_file in enumerate(fbx_files):
+            fbx_path = os.path.join(fbx_folder, fbx_file)
+            fbx_name = os.path.splitext(fbx_file)[0]
+            blend_path = os.path.join(output_folder, fbx_name + ".blend")
+            
+            self.report({'INFO'}, f"[{i+1}/{len(fbx_files)}] Processing: {fbx_file}")
+            
+            try:
+                # Step 1: Clear current scene completely
+                self.report({'INFO'}, f"  Clearing scene...")
+                
+                # Switch to object mode if needed
+                if bpy.context.object and bpy.context.object.mode != 'OBJECT':
+                    bpy.ops.object.mode_set(mode='OBJECT')
+                
+                # Select all objects and delete
+                bpy.ops.object.select_all(action='SELECT')
+                bpy.ops.object.delete(use_global=False)
+                
+                # Force clear ALL data blocks (including protected/fake user ones)
+                # Actions - clear fake user first, then remove
+                for block in list(bpy.data.actions):
+                    block.use_fake_user = False
+                    bpy.data.actions.remove(block)
+                
+                # Meshes
+                for block in list(bpy.data.meshes):
+                    bpy.data.meshes.remove(block)
+                
+                # Armatures
+                for block in list(bpy.data.armatures):
+                    bpy.data.armatures.remove(block)
+                
+                # Cameras
+                for block in list(bpy.data.cameras):
+                    bpy.data.cameras.remove(block)
+                
+                # Lights
+                for block in list(bpy.data.lights):
+                    bpy.data.lights.remove(block)
+                
+                # Materials
+                for block in list(bpy.data.materials):
+                    bpy.data.materials.remove(block)
+                
+                # Textures
+                for block in list(bpy.data.textures):
+                    bpy.data.textures.remove(block)
+                
+                # Images
+                for block in list(bpy.data.images):
+                    bpy.data.images.remove(block)
+                
+                # Curves
+                for block in list(bpy.data.curves):
+                    bpy.data.curves.remove(block)
+                
+                # Node Groups
+                for block in list(bpy.data.node_groups):
+                    bpy.data.node_groups.remove(block)
+                
+                # Worlds
+                for block in list(bpy.data.worlds):
+                    if block.name != "World":
+                        bpy.data.worlds.remove(block)
+                
+                # Remove non-default collections
+                for collection in list(bpy.data.collections):
+                    if collection.name != "Collection":
+                        bpy.data.collections.remove(collection)
+                
+                # Step 2: Apply render settings
+                self.report({'INFO'}, f"  Applying render settings...")
+                render = bpy.context.scene.render
+                render.resolution_x = stored_settings['resolution_x']
+                render.resolution_y = stored_settings['resolution_y']
+                render.resolution_percentage = stored_settings['resolution_percentage']
+                render.fps = stored_settings['fps']
+                render.fps_base = stored_settings['fps_base']
+                render.frame_map_old = stored_settings['frame_map_old']
+                render.frame_map_new = stored_settings['frame_map_new']
+                render.pixel_aspect_x = stored_settings['pixel_aspect_x']
+                render.pixel_aspect_y = stored_settings['pixel_aspect_y']
+                render.image_settings.file_format = stored_settings['file_format']
+                render.image_settings.color_mode = stored_settings['color_mode']
+                render.image_settings.color_depth = stored_settings['color_depth']
+                render.image_settings.compression = stored_settings['compression']
+                
+                # Apply stamp settings
+                render.use_stamp = stored_settings['use_stamp']
+                render.stamp_font_size = stored_settings['stamp_font_size']
+                render.stamp_foreground = stored_settings['stamp_foreground']
+                render.stamp_background = stored_settings['stamp_background']
+                render.use_stamp_labels = stored_settings['use_stamp_labels']
+                
+                # Set output path to relative with FBX name prefix
+                render.filepath = f"//{fbx_name}_"
+                
+                # Step 3: Import FBX
+                self.report({'INFO'}, f"  Importing FBX: {fbx_file}")
+                result = bpy.ops.import_scene.fbx(filepath=fbx_path)
+                if 'FINISHED' in result:
+                    self.report({'INFO'}, f"  FBX imported successfully")
+                else:
+                    self.report({'WARNING'}, f"  FBX import returned: {result}")
+                
+                # Step 4: Run Quick Setup
+                self.report({'INFO'}, f"  Running Quick Setup...")
+                bpy.ops.armature_tools.quick_setup()
+                self.report({'INFO'}, f"  Quick Setup completed")
+                
+                # Step 5: Configure Metadata
+                self.report({'INFO'}, f"  Configuring metadata...")
+                scene = bpy.context.scene
+                
+                # Disable all metadata except Frame
+                scene.render.use_stamp_date = False
+                scene.render.use_stamp_time = False
+                scene.render.use_stamp_render_time = False
+                scene.render.use_stamp_frame = True
+                scene.render.use_stamp_frame_range = False
+                scene.render.use_stamp_memory = False
+                scene.render.use_stamp_hostname = False
+                scene.render.use_stamp_camera = False
+                scene.render.use_stamp_lens = False
+                scene.render.use_stamp_scene = False
+                scene.render.use_stamp_marker = False
+                scene.render.use_stamp_filename = False
+                scene.render.use_stamp_sequencer_strip = False
+                
+                # Set Note to FBX filename and enable it
+                scene.render.stamp_note_text = fbx_name
+                scene.render.use_stamp_note = True
+                
+                # Enable Burn Into Image (use stored setting)
+                scene.render.use_stamp = stored_settings['use_stamp']
+                
+                # Step 6: Save as blend file
+                self.report({'INFO'}, f"  Saving: {blend_path}")
+                bpy.ops.wm.save_as_mainfile(filepath=blend_path)
+                
+                processed_count += 1
+                self.report({'INFO'}, f"  Completed: {fbx_file}")
+                
+            except Exception as e:
+                error_count += 1
+                error_files.append(fbx_file)
+                self.report({'ERROR'}, f"  Error processing {fbx_file}: {str(e)}")
+                print(f"Error processing {fbx_file}: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # Final report
+        if error_count > 0:
+            self.report({'WARNING'}, f"Batch complete: {processed_count} processed, {error_count} errors: {', '.join(error_files)}")
+        else:
+            self.report({'INFO'}, f"Batch complete: {processed_count} files processed successfully!")
+        
+        return {'FINISHED'}
+
+
+# ============================================================
 # Operator classes list for registration
 # ============================================================
 operator_classes = (
@@ -895,4 +1135,5 @@ operator_classes = (
     ARMATURE_TOOLS_OT_toggle_lock_camera,
     ARMATURE_TOOLS_OT_create_fake_bones,
     ARMATURE_TOOLS_OT_mark_acceleration_keyframes,
+    ARMATURE_TOOLS_OT_batch_process_fbx,
 )

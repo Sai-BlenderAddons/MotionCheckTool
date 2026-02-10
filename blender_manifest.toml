@@ -1,9 +1,9 @@
 schema_version = "1.0.0"
 
 id = "armature_tools"
-version = "1.1.0"
+version = "1.2.0"
 name = "Armature Tools"
-tagline = "Armature workflow tools: display controls, follow camera, fake bones, and per-axis mocap error detection"
+tagline = "Armature workflow tools: display controls, follow camera, fake bones, mocap error detection, and batch FBX processing"
 maintainer = "Developer"
 type = "add-on"
 

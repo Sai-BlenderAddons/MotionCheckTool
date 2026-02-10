@@ -1,6 +1,6 @@
 import bpy
 from bpy.types import PropertyGroup
-from bpy.props import FloatProperty
+from bpy.props import FloatProperty, StringProperty
 
 
 # ============================================================
@@ -138,4 +138,19 @@ class ARMATURE_TOOLS_Properties(PropertyGroup):
         max=180.0,
         step=100,
         precision=1,
+    )
+    
+    # Batch Processing Properties
+    batch_fbx_folder: StringProperty(
+        name="FBX Folder",
+        description="Folder containing FBX files to import",
+        default="",
+        subtype='DIR_PATH',
+    )
+    
+    batch_output_folder: StringProperty(
+        name="Output Folder",
+        description="Folder to save processed Blender files",
+        default="",
+        subtype='DIR_PATH',
     )

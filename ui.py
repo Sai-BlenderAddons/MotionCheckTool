@@ -110,26 +110,48 @@ class ARMATURE_TOOLS_PT_main_panel(Panel):
         box.label(text="Camera Setup", icon='CAMERA_DATA')
         box.operator("armature_tools.create_follow_camera", icon='CON_LOCLIKE')
         
-        # Find existing camera target empty and show its rotation speed
+        # Find existing camera target empty
+        camera_target = None
+        camera_obj = None
+        
+        # Method 1: Look for object with expected name
         camera_target_name = f"{armature.name}_Camera_Target"
         camera_name = f"{armature.name}_Follow_Camera"
         
         if camera_target_name in bpy.data.objects:
             camera_target = bpy.data.objects[camera_target_name]
+        
+        if camera_name in bpy.data.objects:
+            camera_obj = bpy.data.objects[camera_name]
+        
+        # Method 2: Search for any object ending with _Camera_Target
+        if not camera_target:
+            for obj in bpy.data.objects:
+                if obj.type == 'EMPTY' and obj.name.endswith("_Camera_Target"):
+                    camera_target = obj
+                    break
+        
+        if not camera_obj:
+            for obj in bpy.data.objects:
+                if obj.type == 'CAMERA' and obj.name.endswith("_Follow_Camera"):
+                    camera_obj = obj
+                    break
+        
+        # Show camera target properties if found
+        if camera_target:
+            # Rotation Speed
             if "rotation_speed" in camera_target:
                 box.prop(camera_target, '["rotation_speed"]', text="Rotation Speed", slider=True)
         else:
             # Show the property for setting default value before creating
             box.prop(props, "camera_rotation_speed", text="Rotation Speed (default)", slider=True)
+            box.label(text="Click button to create camera", icon='INFO')
         
         # Track To influence toggle
-        if camera_name in bpy.data.objects:
-            camera_obj = bpy.data.objects[camera_name]
-            # Find the Track To constraint
+        if camera_obj:
             for constraint in camera_obj.constraints:
                 if constraint.type == 'TRACK_TO':
                     row = box.row()
-                    # Create a toggle that sets influence to 0 or 1
                     icon = 'CHECKBOX_HLT' if constraint.influence > 0.5 else 'CHECKBOX_DEHLT'
                     row.operator("armature_tools.toggle_track_to", text="Track To Target", icon=icon)
                     break
@@ -267,9 +289,253 @@ class ARMATURE_TOOLS_PT_fake_bone_panel(Panel):
 
 
 # ============================================================
+# Batch Processing Panel
+# ============================================================
+class ARMATURE_TOOLS_PT_batch_processing_panel(Panel):
+    """Batch Processing Panel"""
+    bl_label = "Batch Processing"
+    bl_idname = "ARMATURE_TOOLS_PT_batch_processing_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Armature Tools"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    def draw(self, context):
+        layout = self.layout
+        props = context.scene.armature_tools_props
+        
+        # Path Settings
+        box = layout.box()
+        box.label(text="Path Settings", icon='FILE_FOLDER')
+        
+        # FBX Folder
+        col = box.column(align=True)
+        col.label(text="FBX Source Folder:")
+        col.prop(props, "batch_fbx_folder", text="")
+        
+        # Output Folder
+        col = box.column(align=True)
+        col.label(text="Output Folder:")
+        col.prop(props, "batch_output_folder", text="")
+        
+        layout.separator()
+        
+        # Execute Button
+        box = layout.box()
+        box.label(text="Execute", icon='PLAY')
+        row = box.row()
+        row.scale_y = 1.5
+        row.operator("armature_tools.batch_process_fbx", text="Start Batch Processing", icon='FILE_REFRESH')
+
+
+# ============================================================
+# Batch Processing - Format Sub-Panel
+# ============================================================
+class ARMATURE_TOOLS_PT_batch_format_panel(Panel):
+    """Batch Processing Format Settings"""
+    bl_label = "Format"
+    bl_idname = "ARMATURE_TOOLS_PT_batch_format_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Armature Tools"
+    bl_parent_id = "ARMATURE_TOOLS_PT_batch_processing_panel"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+        render = scene.render
+        
+        # Resolution
+        col = layout.column(align=True)
+        col.prop(render, "resolution_x", text="Resolution X")
+        col.prop(render, "resolution_y", text="Y")
+        col.prop(render, "resolution_percentage", text="%")
+        
+        layout.separator()
+        
+        # Aspect Ratio
+        col = layout.column(align=True)
+        col.prop(render, "pixel_aspect_x", text="Aspect X")
+        col.prop(render, "pixel_aspect_y", text="Y")
+
+
+# ============================================================
+# Batch Processing - Frame Range Sub-Panel
+# ============================================================
+class ARMATURE_TOOLS_PT_batch_frame_range_panel(Panel):
+    """Batch Processing Frame Range Settings"""
+    bl_label = "Frame Range"
+    bl_idname = "ARMATURE_TOOLS_PT_batch_frame_range_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Armature Tools"
+    bl_parent_id = "ARMATURE_TOOLS_PT_batch_processing_panel"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+        render = scene.render
+        
+        # Frame Range
+        col = layout.column(align=True)
+        col.prop(scene, "frame_start", text="Frame Start")
+        col.prop(scene, "frame_end", text="End")
+        col.prop(scene, "frame_step", text="Step")
+        
+        layout.separator()
+        
+        # Frame Rate
+        layout.prop(render, "fps")
+        layout.prop(render, "fps_base", text="Base")
+        
+        layout.separator()
+        
+        # Time Remapping
+        col = layout.column(align=True)
+        col.prop(render, "frame_map_old", text="Old")
+        col.prop(render, "frame_map_new", text="New")
+
+
+# ============================================================
+# Batch Processing - Output Sub-Panel
+# ============================================================
+class ARMATURE_TOOLS_PT_batch_output_panel(Panel):
+    """Batch Processing Output Settings"""
+    bl_label = "Output"
+    bl_idname = "ARMATURE_TOOLS_PT_batch_output_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Armature Tools"
+    bl_parent_id = "ARMATURE_TOOLS_PT_batch_processing_panel"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    def draw(self, context):
+        layout = self.layout
+        render = context.scene.render
+        image_settings = render.image_settings
+        
+        # Output Path
+        layout.label(text="Output Path:")
+        layout.prop(render, "filepath", text="")
+        
+        # Info about batch behavior
+        box = layout.box()
+        box.label(text="During batch: path = FBX name + '_'", icon='INFO')
+        
+        layout.separator()
+        
+        # File Format
+        layout.prop(image_settings, "file_format")
+        
+        # Color settings
+        layout.prop(image_settings, "color_mode")
+        
+        # Format-specific settings
+        if image_settings.file_format in {'PNG', 'TIFF', 'OPEN_EXR', 'OPEN_EXR_MULTILAYER'}:
+            layout.prop(image_settings, "color_depth")
+        
+        if image_settings.file_format == 'PNG':
+            layout.prop(image_settings, "compression", text="Compression")
+        
+        if image_settings.file_format in {'JPEG', 'JPEG2000'}:
+            layout.prop(image_settings, "quality", text="Quality")
+        
+        if image_settings.file_format in {'OPEN_EXR', 'OPEN_EXR_MULTILAYER'}:
+            layout.prop(image_settings, "exr_codec")
+        
+        layout.separator()
+        
+        # Overwrite / Placeholders
+        col = layout.column(align=True)
+        col.prop(render, "use_overwrite", text="Overwrite")
+        col.prop(render, "use_placeholder", text="Placeholders")
+        col.prop(render, "use_file_extension", text="File Extensions")
+        col.prop(render, "use_render_cache", text="Cache Result")
+
+
+# ============================================================
+# Batch Processing - Metadata Sub-Panel
+# ============================================================
+class ARMATURE_TOOLS_PT_batch_metadata_panel(Panel):
+    """Batch Processing Metadata Settings"""
+    bl_label = "Metadata"
+    bl_idname = "ARMATURE_TOOLS_PT_batch_metadata_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Armature Tools"
+    bl_parent_id = "ARMATURE_TOOLS_PT_batch_processing_panel"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    def draw(self, context):
+        layout = self.layout
+        render = context.scene.render
+        
+        # Burn Into Image
+        layout.prop(render, "use_stamp", text="Burn Into Image")
+        
+        if render.use_stamp:
+            layout.separator()
+            
+            # Font settings
+            box = layout.box()
+            box.label(text="Font Settings:", icon='FONT_DATA')
+            col = box.column(align=True)
+            col.prop(render, "stamp_font_size", text="Font Size")
+            col.prop(render, "stamp_foreground", text="Text Color")
+            col.prop(render, "stamp_background", text="Background")
+            col.prop(render, "use_stamp_labels", text="Include Labels")
+        
+        layout.separator()
+        
+        # Include options
+        box = layout.box()
+        box.label(text="Include:", icon='TEXT')
+        col = box.column(align=True)
+        col.prop(render, "use_stamp_time", text="Time")
+        col.prop(render, "use_stamp_date", text="Date")
+        col.prop(render, "use_stamp_render_time", text="Render Time")
+        col.prop(render, "use_stamp_frame", text="Frame")
+        col.prop(render, "use_stamp_frame_range", text="Frame Range")
+        col.prop(render, "use_stamp_memory", text="Memory")
+        col.prop(render, "use_stamp_hostname", text="Hostname")
+        col.prop(render, "use_stamp_camera", text="Camera")
+        col.prop(render, "use_stamp_lens", text="Lens")
+        col.prop(render, "use_stamp_scene", text="Scene")
+        col.prop(render, "use_stamp_marker", text="Marker")
+        col.prop(render, "use_stamp_filename", text="Filename")
+        
+        layout.separator()
+        
+        # Note
+        box = layout.box()
+        box.label(text="Note:", icon='STICKY_UVS_LOC')
+        col = box.column(align=True)
+        col.prop(render, "use_stamp_note", text="Enable Note")
+        if render.use_stamp_note:
+            col.prop(render, "stamp_note_text", text="")
+        
+        layout.separator()
+        
+        # Info label
+        box = layout.box()
+        box.label(text="Auto-configured during batch:", icon='INFO')
+        box.label(text="• Frame: ON")
+        box.label(text="• Note: FBX filename")
+        box.label(text="• Output path: FBX name + '_'")
+        box.label(text="• Other Include options: OFF")
+
+
+# ============================================================
 # Panel classes list for registration
 # ============================================================
 panel_classes = (
     ARMATURE_TOOLS_PT_main_panel,
     ARMATURE_TOOLS_PT_fake_bone_panel,
+    ARMATURE_TOOLS_PT_batch_processing_panel,
+    ARMATURE_TOOLS_PT_batch_format_panel,
+    ARMATURE_TOOLS_PT_batch_frame_range_panel,
+    ARMATURE_TOOLS_PT_batch_output_panel,
+    ARMATURE_TOOLS_PT_batch_metadata_panel,
 )
